@@ -18,30 +18,63 @@
 package org.fusesource.scalate.filter
 
 import org.fusesource.scalate.{TemplateEngineAddOn, RenderContext, TemplateEngine}
-import com.asual.lesscss.LessEngine
+import org.fusesource.scalate.servlet.ServletRenderContext
+import org.fusesource.scalate.util.IOUtil
+import com.asual.lesscss.{LessEngine, LessOptions}
+import com.asual.lesscss.loader.ResourceLoader
+import java.io.IOException
 
 /**
  * Renders Less syntax.
  *
  * @author <a href="mailto:stuart.roebuck@gmail.com">Stuart Roebuck</a>
  */
-object LessFilter extends Filter with TemplateEngineAddOn {
-
-  private val lessEngine = new LessEngine
-
+class LessFilter(private val lessEngine: LessEngine) extends Filter {
   def filter(context: RenderContext, content: String) = {
-    synchronized {
+    val css = synchronized {
+    	
       // This code block is synchronized as I'm not confident that the Less filter is thread safe.
-      val css = lessEngine.compile(content).stripLineEnd
+      lessEngine.compile(content, context.currentTemplate).stripLineEnd
+    }
+    if(context.currentTemplate.endsWith(".less")) {
+      context.attributes("layout") = ""
+      css
+    } else {
+      // rendering less block embedded in another template
       """<style type="text/css">%n%s%n</style>""".format(css)
     }
   }
+}
 
-  /**
-   * Add the less filter to the template engine.
-   */
+/**
+ * Adds the less filter to the template engine.
+ */
+object LessFilterAddOn extends TemplateEngineAddOn {
   def apply(te: TemplateEngine) {
-    te.filters += "less" -> LessFilter
-    te.pipelines += "less" -> List(LessFilter)
+    val lessEngine = new LessEngine(new LessOptions, new ScalateResourceLoader(te))
+    val lessFilter = new LessFilter(lessEngine)
+    te.filters += "less" -> lessFilter
+    te.pipelines += "less" -> List(NoLayoutFilter(lessFilter, "text/css"))
+    te.templateExtensionsFor("css") += "less"
+  }
+}
+
+/**
+ * Less ResourceLoader for processing includes
+ *
+ * @author Rafał Krzewski
+ */
+class ScalateResourceLoader(private val engine: TemplateEngine) extends ResourceLoader {
+  def exists(path: String): Boolean = {
+    engine.resourceLoader.resource(path).isDefined
+  }
+
+  def load(path: String, charset: String): String = {
+    engine.resourceLoader.resource(path) match {
+      case Some(r) =>
+        IOUtil.loadText(r.inputStream, charset)
+      case _ =>
+        throw new IOException("No such file " + path)
+    }
   }
 }
